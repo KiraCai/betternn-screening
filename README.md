@@ -101,6 +101,26 @@ uv run python scripts/run_betternn.py \
 | `--predict-size` | whole library | randomly sample this many molecules from the library as the prediction pool |
 | `--pool-seed` | `0` | RNG seed for that random subset |
 
+### screen mode (train on library, rank another file)
+| flag | default | meaning |
+|---|---|---|
+| `--screen-file` | — | CSV of molecules to RANK. Trains BetterNN on the **whole scored** `library.csv`, then predicts this file and writes a ranked shortlist. |
+
+Use this for the real scenario **"some molecules scored (training) + many unscored to rank"**: put the scored molecules in `<data-dir>/library.csv` and the molecules to rank (score column optional) in the screen file.
+
+```bash
+uv run python scripts/run_betternn.py \
+    --data-dir data/my_protein --screen-file data/my_protein/to_rank.csv
+```
+
+- Training set = the **whole** scored library (cap it with `--n-train N` if you want).
+- Fingerprints for the screen file are generated once and cached next to it as
+  `<screen-file-stem>_fingerprints/`.
+- If the screen file itself has the score column, a Spearman check is printed.
+- Output: `<tag>_screen_top<K>.csv` (id, smiles, [score], `betternn_pred`).
+- Note: the screen file is held in memory. For 100M–1B libraries, streaming
+  prediction + bit-packed fingerprints are needed (see *Planned improvements*).
+
 ### compute
 | flag | default | meaning |
 |---|---|---|

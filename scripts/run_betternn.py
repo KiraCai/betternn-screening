@@ -75,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--pool-seed", type=int, default=0,
                    help="RNG seed for the random prediction-pool subset")
 
+    # --- screen mode: train on scored library, rank a separate (unscored) file ---
+    g = p.add_argument_group("screen mode (train on library, rank another file)")
+    g.add_argument("--screen-file", default=None,
+                   help="CSV of molecules to RANK. Trains BetterNN on the whole scored "
+                        "library.csv, then predicts this file (its score column is "
+                        "optional). Fingerprints for it are cached next to it.")
+
     # --- compute ---
     g = p.add_argument_group("compute")
     g.add_argument("--cpus", type=int, default=None,
@@ -153,6 +160,28 @@ def choose_cpus(args) -> int:
         return total
 
 
+def get_or_make_fps(fp_dir, smiles_list, n_cpu: int):
+    """Load fingerprints from fp_dir, or generate + cache them. Returns (concat X, valid)."""
+    import numpy as np
+    from lib import features as Fx
+    fp_dir = Path(fp_dir)
+    have = (fp_dir / "morgan_2048.npz").exists() or (fp_dir / "morgan_2048.npy").exists()
+    if have:
+        bf = Fx.load_fingerprints(fp_dir)
+        print(f"[features] loaded fingerprints from {fp_dir}")
+    else:
+        print(f"[features] generating fingerprints for {len(smiles_list):,} mols on {n_cpu} CPU workers ...")
+        bf = Fx.featurize_batch([str(s) for s in smiles_list], n_workers=n_cpu)
+        fp_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(fp_dir / "morgan_2048.npz", data=bf.morgan)
+        np.savez_compressed(fp_dir / "atompair.npz", data=bf.atompair)
+        np.save(fp_dir / "descriptors.npy", bf.descriptors)
+        np.save(fp_dir / "valid.npy", bf.valid)
+        np.save(fp_dir / "canonical_smiles.npy", bf.canonical_smiles)
+        print(f"[features] saved fingerprints to {fp_dir}")
+    return Fx.concat_fingerprints(bf.morgan, bf.atompair), bf.valid.astype(bool)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -229,6 +258,45 @@ def main() -> None:
     y = df[args.score_col].values.astype(np.float32)
     N = len(y)
     print(f"[data] usable molecules: {N:,}  (fingerprint dim {X.shape[1]})")
+
+    # 5b) SCREEN MODE: train on the whole scored library, rank a separate file
+    if args.screen_file:
+        screen_path = Path(args.screen_file)
+        sdf = pd.read_csv(screen_path)
+        print(f"[screen] {screen_path}: {len(sdf):,} molecules to rank")
+        # training set = the whole scored library, unless --n-train caps it
+        if args.n_train:
+            tr = np.random.RandomState(seeds[0]).choice(N, min(args.n_train, N), replace=False)
+        else:
+            tr = np.arange(N)
+        print(f"[screen] training on {len(tr):,} scored molecules "
+              f"({args.n_models} members × {len(seeds)} seeds)")
+        # fingerprints for the screen file (cached next to it)
+        s_fp = screen_path.parent / f"{screen_path.stem}_fingerprints"
+        n_cpu_s = choose_cpus(args) if not (
+            (s_fp / "morgan_2048.npz").exists() or (s_fp / "morgan_2048.npy").exists()) else 1
+        Xs, svalid = get_or_make_fps(s_fp, sdf[args.smiles_col].astype(str).tolist(), n_cpu_s)
+        if len(svalid) == len(sdf):
+            sdf = sdf[svalid].reset_index(drop=True); Xs = Xs[svalid]
+        pred_accum = np.zeros(len(Xs), dtype=np.float64)
+        for si, seed in enumerate(seeds, 1):
+            res = train_ensemble("betternn", X[tr], y[tr], Xs, seed=seed, n_models=args.n_models)
+            pred_accum += res.mean
+            print(f"  [{si}/{len(seeds)}] seed={seed} done", flush=True)
+        pred = pred_accum / len(seeds)
+        sdf["betternn_pred"] = pred
+        # optional metrics if the screen file itself carries a score / binder flag
+        if args.score_col in sdf.columns and sdf[args.score_col].notna().any():
+            m = sdf[args.score_col].notna().values
+            print(f"[screen] Spearman vs '{args.score_col}' on {int(m.sum()):,} scored rows: "
+                  f"{M.spearman(sdf[args.score_col].values[m], pred[m]):.3f}")
+        ranked = sdf.sort_values("betternn_pred", ascending=False).head(args.top_k)
+        cols = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred")
+                if c in ranked.columns]
+        rank_path = out_dir / f"{tag}_screen_top{args.top_k}.csv"
+        ranked[cols].to_csv(rank_path, index=False)
+        print(f"\nSaved ranked screen shortlist:\n  {rank_path}")
+        return
 
     # 6) prediction pool (optional random subset of the whole library)
     if args.predict_size and args.predict_size < N:
