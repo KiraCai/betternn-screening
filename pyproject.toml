@@ -1,0 +1,30 @@
+[project]
+name = "betternn-screening"
+version = "1.0.0"
+description = "BetterNN deep-ensemble surrogate for large-scale virtual screening (per-target BetterNN runner)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy",
+    "pandas",
+    "torch==2.6.0",
+    "scikit-learn",
+    "scipy",
+    "rdkit>=2024.03",
+    "matplotlib",
+    "tqdm",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+
+# Pin torch to the CUDA 12.4 build so `uv sync` / `uv run` match older NVIDIA
+# drivers (driver 12.4) and keep GPU training working. Change the index below
+# if your driver supports a newer CUDA (e.g. cu128).
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }

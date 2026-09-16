@@ -1,0 +1,25 @@
+# Large binary fingerprint files (use compressed .npz versions instead)
+data/sample/fingerprints/morgan_2048.npy
+data/sample/fingerprints/atompair.npy
+
+# Full-scale datasets (too large for git, see "Full Data Sources" in data/README.md)
+data/adra2b_1m/
+data/boltzdock_1M/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# UV (uv.lock is committed to pin exact dependency versions)
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+results/
