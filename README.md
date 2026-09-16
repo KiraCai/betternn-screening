@@ -119,8 +119,12 @@ uv run python scripts/run_betternn.py \
 - If the screen file itself has the score column, a Spearman check is printed.
 - Output: `<tag>_screen_all.csv` (**all** predictions) + `<tag>_screen_top<K>.csv`
   (id, smiles, [score], `betternn_pred`).
-- Note: the screen file is held in memory. For 100M–1B libraries, streaming
-  prediction + bit-packed fingerprints are needed (see *Planned improvements*).
+- **Huge files**: screening auto-streams for files > `--stream-threshold-mb`
+  (200 MB) or with `--stream`; it reads in chunks of `--screen-chunk` rows,
+  featurizes+predicts each chunk with the ONCE-trained ensemble, and writes at
+  constant memory. In streaming mode `<tag>_screen_all.csv` is in **input order**
+  (top-K stays correctly sorted); small files stay in-memory and globally sorted.
+  For a 1B screen use few seeds (e.g. `--seeds 42`).
 
 ### compute
 | flag | default | meaning |

@@ -80,7 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--screen-file", default=None,
                    help="CSV of molecules to RANK. Trains BetterNN on the whole scored "
                         "library.csv, then predicts this file (its score column is "
-                        "optional). Fingerprints for it are cached next to it.")
+                        "optional).")
+    g.add_argument("--stream", action="store_true",
+                   help="Force streaming (chunked) screening for huge files. Auto-enabled "
+                        "for screen files larger than --stream-threshold-mb.")
+    g.add_argument("--stream-threshold-mb", type=int, default=200,
+                   help="Screen files larger than this (MB) are streamed automatically")
+    g.add_argument("--screen-chunk", type=int, default=200_000,
+                   help="Rows per chunk when streaming a screen file")
 
     # --- compute ---
     g = p.add_argument_group("compute")
@@ -261,43 +268,76 @@ def main() -> None:
 
     # 5b) SCREEN MODE: train on the whole scored library, rank a separate file
     if args.screen_file:
+        from lib.features import featurize_batch, concat_fingerprints
+        from lib.models import train_members, predict_members
         screen_path = Path(args.screen_file)
-        sdf = pd.read_csv(screen_path)
-        print(f"[screen] {screen_path}: {len(sdf):,} molecules to rank")
+
         # training set = the whole scored library, unless --n-train caps it
         if args.n_train:
             tr = np.random.RandomState(seeds[0]).choice(N, min(args.n_train, N), replace=False)
         else:
             tr = np.arange(N)
+        # train ALL ensemble members once (across seeds), keep them for streaming
         print(f"[screen] training on {len(tr):,} scored molecules "
-              f"({args.n_models} members × {len(seeds)} seeds)")
-        # fingerprints for the screen file (cached next to it)
-        s_fp = screen_path.parent / f"{screen_path.stem}_fingerprints"
-        n_cpu_s = choose_cpus(args) if not (
-            (s_fp / "morgan_2048.npz").exists() or (s_fp / "morgan_2048.npy").exists()) else 1
-        Xs, svalid = get_or_make_fps(s_fp, sdf[args.smiles_col].astype(str).tolist(), n_cpu_s)
-        if len(svalid) == len(sdf):
-            sdf = sdf[svalid].reset_index(drop=True); Xs = Xs[svalid]
-        pred_accum = np.zeros(len(Xs), dtype=np.float64)
+              f"({args.n_models} members × {len(seeds)} seeds) ...")
+        members = []
         for si, seed in enumerate(seeds, 1):
-            res = train_ensemble("betternn", X[tr], y[tr], Xs, seed=seed, n_models=args.n_models)
-            pred_accum += res.mean
-            print(f"  [{si}/{len(seeds)}] seed={seed} done", flush=True)
-        pred = pred_accum / len(seeds)
-        sdf["betternn_pred"] = pred
-        # optional metrics if the screen file itself carries a score / binder flag
-        if args.score_col in sdf.columns and sdf[args.score_col].notna().any():
-            m = sdf[args.score_col].notna().values
-            print(f"[screen] Spearman vs '{args.score_col}' on {int(m.sum()):,} scored rows: "
-                  f"{M.spearman(sdf[args.score_col].values[m], pred[m]):.3f}")
-        full = sdf.sort_values("betternn_pred", ascending=False)
-        cols = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred")
-                if c in full.columns]
+            members += train_members("betternn", X[tr], y[tr], seed=seed, n_models=args.n_models)
+            print(f"  [{si}/{len(seeds)}] seed={seed} trained", flush=True)
+        del X, y  # free the library matrix before the big screen pass
+
+        size_mb = screen_path.stat().st_size / 1e6
+        stream = args.stream or size_mb > args.stream_threshold_mb
+        n_cpu_s = choose_cpus(args)
         all_path = out_dir / f"{tag}_screen_all.csv"
         rank_path = out_dir / f"{tag}_screen_top{args.top_k}.csv"
-        full[cols].to_csv(all_path, index=False)
-        full[cols].head(args.top_k).to_csv(rank_path, index=False)
-        print(f"\nSaved screen predictions:\n  {all_path}  (all {len(full):,})\n  {rank_path}  (top {args.top_k})")
+
+        if not stream:
+            # -- in-memory: whole file at once, globally sorted --
+            sdf = pd.read_csv(screen_path)
+            print(f"[screen] {len(sdf):,} molecules (in-memory)")
+            bf = featurize_batch(sdf[args.smiles_col].astype(str).tolist(), n_workers=n_cpu_s)
+            Xs = concat_fingerprints(bf.morgan, bf.atompair)
+            if bf.valid.sum() < len(sdf):
+                sdf = sdf[bf.valid].reset_index(drop=True); Xs = Xs[bf.valid]
+            sdf["betternn_pred"] = predict_members(members, Xs)
+            if args.score_col in sdf.columns and sdf[args.score_col].notna().any():
+                mm = sdf[args.score_col].notna().values
+                print(f"[screen] Spearman vs '{args.score_col}' on {int(mm.sum()):,} rows: "
+                      f"{M.spearman(sdf[args.score_col].values[mm], sdf['betternn_pred'].values[mm]):.3f}")
+            full = sdf.sort_values("betternn_pred", ascending=False)
+            keep = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred") if c in full.columns]
+            full[keep].to_csv(all_path, index=False)
+            full[keep].head(args.top_k).to_csv(rank_path, index=False)
+            print(f"\nSaved screen predictions:\n  {all_path}  (all {len(full):,})\n  {rank_path}  (top {args.top_k})")
+            return
+
+        # -- streaming: chunked, constant memory --
+        print(f"[screen] streaming {size_mb:.0f} MB in chunks of {args.screen_chunk:,} rows "
+              f"({n_cpu_s} CPU workers for fingerprints); '{all_path.name}' is in input order")
+        top_frames: list[pd.DataFrame] = []
+        header_written = False
+        n_seen = n_valid = 0
+        for ci, chunk in enumerate(pd.read_csv(screen_path, chunksize=args.screen_chunk), 1):
+            n_seen += len(chunk)
+            bf = featurize_batch(chunk[args.smiles_col].astype(str).tolist(), n_workers=n_cpu_s)
+            Xs = concat_fingerprints(bf.morgan, bf.atompair)
+            chunk = chunk[bf.valid].reset_index(drop=True); Xs = Xs[bf.valid]
+            if len(chunk) == 0:
+                continue
+            chunk["betternn_pred"] = predict_members(members, Xs)
+            keep = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred") if c in chunk.columns]
+            chunk[keep].to_csv(all_path, mode="a", header=not header_written, index=False)
+            header_written = True
+            # running top-K
+            top_frames.append(chunk.nlargest(min(args.top_k, len(chunk)), "betternn_pred")[keep])
+            top_frames = [pd.concat(top_frames).nlargest(args.top_k, "betternn_pred")]
+            n_valid += len(chunk)
+            print(f"  chunk {ci}: {n_seen:,} read, {n_valid:,} scored", flush=True)
+        if top_frames:
+            top_frames[0].to_csv(rank_path, index=False)
+        print(f"\nSaved screen predictions:\n  {all_path}  (all {n_valid:,}, input order)\n"
+              f"  {rank_path}  (top {args.top_k})")
         return
 
     # 6) prediction pool (optional random subset of the whole library)

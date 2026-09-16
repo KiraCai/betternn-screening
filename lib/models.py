@@ -434,6 +434,45 @@ def build_model(
     raise ValueError(f"Unknown model type: {model_type}")
 
 
+def train_members(
+    model_type: Literal["deepens", "boltznn", "betternn"],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    seed: int = 42,
+    n_models: int = 5,
+    cfg: TrainConfig | None = None,
+) -> list[tuple[nn.Module, float, float]]:
+    """Train an ensemble and RETURN the fitted members (no prediction).
+
+    Returns a list of (model, y_mean, y_std). Use this for streaming prediction
+    over a huge pool: train once, keep the models, then predict chunk by chunk.
+    """
+    ensure_deterministic()
+    if cfg is None:
+        cfg = DEFAULT_CONFIGS[model_type]
+    members: list[tuple[nn.Module, float, float]] = []
+    for m in range(n_models):
+        member_seed = seed + 17 * m if model_type == "boltznn" else seed * 1000 + m
+        torch.manual_seed(member_seed)
+        net = build_model(model_type, X_train.shape[1], len(X_train))
+        net = train_single(net, X_train, y_train, cfg, seed=member_seed)
+        members.append((net, float(net._y_mean), float(net._y_std)))  # type: ignore[attr-defined]
+    return members
+
+
+@torch.no_grad()
+def predict_members(
+    members: list[tuple[nn.Module, float, float]],
+    X: np.ndarray,
+    batch_size: int = 8192,
+) -> np.ndarray:
+    """Mean prediction over fitted ensemble members (single-head models)."""
+    acc = np.zeros(len(X), dtype=np.float64)
+    for net, y_mean, y_std in members:
+        acc += predict_single(net, X, y_mean, y_std, batch_size=batch_size)
+    return (acc / len(members)).astype(np.float32)
+
+
 def train_ensemble(
     model_type: Literal["deepens", "boltznn", "betternn"],
     X_train: np.ndarray,
