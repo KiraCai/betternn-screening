@@ -117,7 +117,8 @@ uv run python scripts/run_betternn.py \
 - Fingerprints for the screen file are generated once and cached next to it as
   `<screen-file-stem>_fingerprints/`.
 - If the screen file itself has the score column, a Spearman check is printed.
-- Output: `<tag>_screen_top<K>.csv` (id, smiles, [score], `betternn_pred`).
+- Output: `<tag>_screen_all.csv` (**all** predictions) + `<tag>_screen_top<K>.csv`
+  (id, smiles, [score], `betternn_pred`).
 - Note: the screen file is held in memory. For 100M–1B libraries, streaming
   prediction + bit-packed fingerprints are needed (see *Planned improvements*).
 
@@ -171,6 +172,7 @@ Written to `--output-dir` (prefixed by `--tag`):
 
 - `<tag>_betternn_perseed.csv` — metrics for every seed.
 - `<tag>_betternn_summary.csv` — mean ± std across seeds.
+- `<tag>_betternn_all.csv` — **every** molecule with its prediction (sorted).
 - `<tag>_betternn_top<K>.csv` — top-K molecules by the seed-averaged prediction
   (`id, smiles, score, betternn_pred`), i.e. your shortlist for the oracle.
 

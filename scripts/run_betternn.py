@@ -290,12 +290,14 @@ def main() -> None:
             m = sdf[args.score_col].notna().values
             print(f"[screen] Spearman vs '{args.score_col}' on {int(m.sum()):,} scored rows: "
                   f"{M.spearman(sdf[args.score_col].values[m], pred[m]):.3f}")
-        ranked = sdf.sort_values("betternn_pred", ascending=False).head(args.top_k)
+        full = sdf.sort_values("betternn_pred", ascending=False)
         cols = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred")
-                if c in ranked.columns]
+                if c in full.columns]
+        all_path = out_dir / f"{tag}_screen_all.csv"
         rank_path = out_dir / f"{tag}_screen_top{args.top_k}.csv"
-        ranked[cols].to_csv(rank_path, index=False)
-        print(f"\nSaved ranked screen shortlist:\n  {rank_path}")
+        full[cols].to_csv(all_path, index=False)
+        full[cols].head(args.top_k).to_csv(rank_path, index=False)
+        print(f"\nSaved screen predictions:\n  {all_path}  (all {len(full):,})\n  {rank_path}  (top {args.top_k})")
         return
 
     # 6) prediction pool (optional random subset of the whole library)
@@ -358,15 +360,17 @@ def main() -> None:
     # 10) ranked top molecules (from the seed-averaged prediction)
     df_out = df.copy()
     df_out["betternn_pred"] = pred_accum / len(seeds)
-    ranked = df_out.sort_values("betternn_pred", ascending=False).head(args.top_k)
-    cols = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred") if c in ranked.columns]
+    full = df_out.sort_values("betternn_pred", ascending=False)
+    cols = [c for c in (args.id_col, args.smiles_col, args.score_col, "betternn_pred") if c in full.columns]
+    all_path = out_dir / f"{tag}_betternn_all.csv"
     rank_path = out_dir / f"{tag}_betternn_top{args.top_k}.csv"
-    ranked[cols].to_csv(rank_path, index=False)
+    full[cols].to_csv(all_path, index=False)
+    full[cols].head(args.top_k).to_csv(rank_path, index=False)
 
     print("\n=== summary (mean ± std over seeds) ===")
     for _, r in summary.iterrows():
         print(f"  {r['metric']:<16} {r['mean']:.4f} ± {r['std']:.4f}")
-    print(f"\nSaved:\n  {long_path}\n  {summ_path}\n  {rank_path}")
+    print(f"\nSaved:\n  {long_path}\n  {summ_path}\n  {all_path}  (all {len(full):,})\n  {rank_path}  (top {args.top_k})")
 
 
 if __name__ == "__main__":
