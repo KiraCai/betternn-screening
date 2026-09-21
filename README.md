@@ -13,6 +13,10 @@ rank a whole library after scoring only a small fraction with the oracle.
 
 ## 0. Prerequisites — install `uv`
 
+**Python 3.12 is required** (`>=3.12,<3.13`). Check with `python3 --version`. `uv`
+can fetch a matching interpreter for you (`uv python install 3.12`); with the
+plain-venv fallback you must already have Python 3.12.
+
 `uv` is a fast Python package manager. You do **not** need admin rights for the
 recommended option. Pick whichever works on your machine:
 
