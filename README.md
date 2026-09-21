@@ -11,6 +11,37 @@ rank a whole library after scoring only a small fraction with the oracle.
 
 ---
 
+## 0. Prerequisites — install `uv`
+
+`uv` is a fast Python package manager. You do **not** need admin rights for the
+recommended option. Pick whichever works on your machine:
+
+**Option A (recommended, no admin) — official standalone installer**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# no curl? use wget:
+# wget -qO- https://astral.sh/uv/install.sh | sh
+source ~/.bashrc            # or: export PATH="$HOME/.local/bin:$PATH"
+uv --version               # check it is found
+```
+
+**Option B — via pip (if you already have Python + pip)**
+```bash
+python3 -m pip install --user uv     # installs into ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"
+```
+If pip itself is missing: `python3 -m ensurepip --upgrade` first, then the above.
+
+**Option C — via conda / mamba**
+```bash
+conda install -c conda-forge uv      # or: mamba install -c conda-forge uv
+```
+
+If you **cannot install `uv` at all** (locked environment), use the plain-venv
+fallback in §1.1.
+
+---
+
 ## 1. Install
 
 ```bash
@@ -23,6 +54,24 @@ index URL in `pyproject.toml` (`pytorch-cu124` → e.g. `cu128`) and re-`uv sync
 
 Run scripts with either `uv run python scripts/run_betternn.py ...` **or**
 directly `.venv/bin/python scripts/run_betternn.py ...`.
+
+### 1.1 Fallback without `uv` (plain venv + pip)
+
+If package installation is restricted, a virtual environment gives you your own
+pip that usually works even when the system one is blocked:
+
+```bash
+python3 -m venv .venv                 # isolated env you fully control
+source .venv/bin/activate
+python -m pip install --upgrade pip
+# base deps:
+pip install numpy pandas scikit-learn scipy "rdkit>=2024.03" matplotlib tqdm
+# GPU torch matching driver CUDA 12.4 (change cu124 if your driver is newer):
+pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+```
+
+Then run scripts with `python scripts/run_betternn.py ...` (while activated) or
+`.venv/bin/python scripts/run_betternn.py ...`.
 
 ---
 
