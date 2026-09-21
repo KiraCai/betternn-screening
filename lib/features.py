@@ -122,8 +122,13 @@ def featurize_batch(
     return BatchFeatures(canon, morgan, atompair, desc, valid)
 
 
-def _load_array(fp_dir: Path, name: str) -> np.ndarray:
-    """Load .npz (compressed) or .npy, preferring npz."""
+def _load_array(fp_dir: Path, name: str, n_bits: int) -> np.ndarray:
+    """Load a fingerprint array as float32, transparently unpacking bit-packed
+    storage. Prefers `<name>.packed.npy` (uint8, np.packbits) > `.npz` > `.npy`."""
+    packed = fp_dir / f"{name}.packed.npy"
+    if packed.exists():
+        bits = np.unpackbits(np.load(packed), axis=1)[:, :n_bits]
+        return bits.astype(np.float32)
     npz = fp_dir / f"{name}.npz"
     npy = fp_dir / f"{name}.npy"
     if npz.exists():
@@ -131,11 +136,27 @@ def _load_array(fp_dir: Path, name: str) -> np.ndarray:
     return np.load(npy).astype(np.float32)
 
 
+def save_fingerprints(fp_dir: str | Path, bf: BatchFeatures, packed: bool = False) -> None:
+    """Save a BatchFeatures to disk. With packed=True the Morgan/AtomPair bit
+    vectors are stored bit-packed (np.packbits, uint8) — ~32x smaller than the
+    float32 .npz. Descriptors/valid/canonical are always plain .npy."""
+    fp_dir = Path(fp_dir); fp_dir.mkdir(parents=True, exist_ok=True)
+    if packed:
+        np.save(fp_dir / "morgan_2048.packed.npy", np.packbits(bf.morgan.astype(np.uint8), axis=1))
+        np.save(fp_dir / "atompair.packed.npy", np.packbits(bf.atompair.astype(np.uint8), axis=1))
+    else:
+        np.savez_compressed(fp_dir / "morgan_2048.npz", data=bf.morgan)
+        np.savez_compressed(fp_dir / "atompair.npz", data=bf.atompair)
+    np.save(fp_dir / "descriptors.npy", bf.descriptors)
+    np.save(fp_dir / "valid.npy", bf.valid)
+    np.save(fp_dir / "canonical_smiles.npy", bf.canonical_smiles)
+
+
 def load_fingerprints(fp_dir: str | Path) -> BatchFeatures:
-    """Load pre-computed fingerprints from a directory of .npy/.npz files."""
+    """Load pre-computed fingerprints from a directory of .npy/.npz/.packed.npy files."""
     fp_dir = Path(fp_dir)
-    morgan = _load_array(fp_dir, "morgan_2048")
-    atompair = _load_array(fp_dir, "atompair")
+    morgan = _load_array(fp_dir, "morgan_2048", MORGAN_BITS)
+    atompair = _load_array(fp_dir, "atompair", ATOMPAIR_BITS)
     desc_path = fp_dir / "descriptors.npy"
     descriptors = np.load(desc_path) if desc_path.exists() else np.zeros((len(morgan), N_DESCRIPTORS), dtype=np.float32)
     valid_path = fp_dir / "valid.npy"

@@ -43,7 +43,10 @@ data/<target>/
 - **`binders.csv`** (optional) lists experimentally validated binder ids; if
   present you get binder ROC-AUC and enrichment factors.
 - **`fingerprints/`** — if absent, it is generated automatically (see CPU prompt
-  below) and cached, so subsequent runs are fast.
+  below) and cached, so subsequent runs are fast. Add `--packed` to store them
+  bit-packed (`morgan_2048.packed.npy`, uint8, ~32× smaller than the float32 cache);
+  they are unpacked transparently on load, so packed and unpacked caches are
+  interchangeable.
 
 A ready **ADRA2B** demo lives in `data/sample/` (10k molecules, 21 binders).
 
@@ -132,6 +135,7 @@ uv run python scripts/run_betternn.py \
 | `--cpus` | *ask* | CPU workers for fingerprint generation; if omitted and FPs are missing, it shows the available core count and asks |
 | `--gpus` | *ask* | GPU index(es) for training, e.g. `0` or `0,1`; `cpu` forces CPU; if omitted it lists GPUs and asks |
 | `--no-interactive` | off | never prompt — use all CPUs and GPU 0 (or CPU if none) |
+| `--packed` | off | store generated fingerprints **bit-packed** (uint8, ~32× smaller on disk than float32); loaded back transparently |
 
 ### output
 | flag | default | meaning |

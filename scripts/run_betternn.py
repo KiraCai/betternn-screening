@@ -98,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
                         '"cpu" forces CPU. Asks if omitted.')
     g.add_argument("--no-interactive", action="store_true",
                    help="Never prompt; use defaults (all CPUs, GPU 0 if present)")
+    g.add_argument("--packed", action="store_true",
+                   help="Store generated fingerprints BIT-PACKED (uint8, ~32x smaller "
+                        "on disk than float32); loaded back transparently")
 
     # --- output ---
     g = p.add_argument_group("output")
@@ -167,28 +170,6 @@ def choose_cpus(args) -> int:
         return total
 
 
-def get_or_make_fps(fp_dir, smiles_list, n_cpu: int):
-    """Load fingerprints from fp_dir, or generate + cache them. Returns (concat X, valid)."""
-    import numpy as np
-    from lib import features as Fx
-    fp_dir = Path(fp_dir)
-    have = (fp_dir / "morgan_2048.npz").exists() or (fp_dir / "morgan_2048.npy").exists()
-    if have:
-        bf = Fx.load_fingerprints(fp_dir)
-        print(f"[features] loaded fingerprints from {fp_dir}")
-    else:
-        print(f"[features] generating fingerprints for {len(smiles_list):,} mols on {n_cpu} CPU workers ...")
-        bf = Fx.featurize_batch([str(s) for s in smiles_list], n_workers=n_cpu)
-        fp_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(fp_dir / "morgan_2048.npz", data=bf.morgan)
-        np.savez_compressed(fp_dir / "atompair.npz", data=bf.atompair)
-        np.save(fp_dir / "descriptors.npy", bf.descriptors)
-        np.save(fp_dir / "valid.npy", bf.valid)
-        np.save(fp_dir / "canonical_smiles.npy", bf.canonical_smiles)
-        print(f"[features] saved fingerprints to {fp_dir}")
-    return Fx.concat_fingerprints(bf.morgan, bf.atompair), bf.valid.astype(bool)
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -237,18 +218,13 @@ def main() -> None:
 
     # 4) fingerprints — load or generate
     fp_dir = data_dir / "fingerprints"
-    need = not ((fp_dir / "morgan_2048.npz").exists() or (fp_dir / "morgan_2048.npy").exists())
+    need = not any((fp_dir / f"morgan_2048{ext}").exists() for ext in (".packed.npy", ".npz", ".npy"))
     if need:
         n_cpu = choose_cpus(args)
         print(f"[features] no fingerprints found -> generating on {n_cpu} CPU workers ...")
         bf = Fx.featurize_batch(df[args.smiles_col].astype(str).tolist(), n_workers=n_cpu)
-        fp_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(fp_dir / "morgan_2048.npz", data=bf.morgan)
-        np.savez_compressed(fp_dir / "atompair.npz", data=bf.atompair)
-        np.save(fp_dir / "descriptors.npy", bf.descriptors)
-        np.save(fp_dir / "valid.npy", bf.valid)
-        np.save(fp_dir / "canonical_smiles.npy", bf.canonical_smiles)
-        print(f"[features] saved fingerprints to {fp_dir}")
+        Fx.save_fingerprints(fp_dir, bf, packed=args.packed)
+        print(f"[features] saved fingerprints to {fp_dir}" + ("  (bit-packed)" if args.packed else ""))
     else:
         bf = Fx.load_fingerprints(fp_dir)
         print(f"[features] loaded fingerprints from {fp_dir}")
